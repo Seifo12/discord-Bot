@@ -689,6 +689,12 @@ async def give_role_slash(interaction: discord.Interaction, member: discord.Memb
     
     roles_to_remove = []
     for member_role in member.roles:
+        if member_role.name == "@everyone":
+            continue
+        
+        if member_role.name not in ROLE_HIERARCHY:
+            continue
+        
         member_role_rank = get_role_rank(member_role.name)
         if member_role_rank > target_role_rank:
             roles_to_remove.append(member_role)

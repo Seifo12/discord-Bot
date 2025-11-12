@@ -1,6 +1,7 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Select
 import asyncio
 import random
 import os
@@ -9,14 +10,12 @@ from flask import Flask
 from threading import Thread
 
 # ====================== إعدادات التوكن ======================
-# التوكن يُقرأ من المتغيرات البيئية (Secrets في Replit أو Variables في Railway)
 TOKEN = os.environ.get('TOKEN')
 
 if not TOKEN:
     print("❌ خطأ: لم يتم العثور على التوكن!")
     print("📝 تأكد من إضافة TOKEN في:")
     print("   - Replit: اذهب إلى Secrets وأضف TOKEN")
-    print("   - Railway: اذهب إلى Variables وأضف TOKEN")
     exit()
 
 # ====================== إعداد Flask للإبقاء على البوت حياً ======================
@@ -80,6 +79,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # قواعد البيانات
 tickets_db = {}
+tickets_by_channel = {}
 warnings_db = {}
 levels_db = {}
 economy_db = {}
@@ -141,15 +141,42 @@ CATEGORIES_AND_CHANNELS = {
     ]
 }
 
-# ==================== نظام التذاكر ====================
-class TicketButton(View):
+# ====================== نظام التذاكر المحسّن ======================
+class TicketTypeSelect(Select):
     def __init__(self):
-        super().__init__(timeout=None)
+        options = [
+            discord.SelectOption(
+                label="دعم فني",
+                description="مشاكل تقنية وأسئلة حول البوت",
+                emoji="💻",
+                value="tech_support"
+            ),
+            discord.SelectOption(
+                label="مشكلة بالسيرفر",
+                description="مشاكل متعلقة بإعدادات السيرفر",
+                emoji="⚙️",
+                value="server_problem"
+            ),
+            discord.SelectOption(
+                label="مشكلة بسبب الإدارة",
+                description="شكاوى أو مشاكل مع الإدارة",
+                emoji="👔",
+                value="admin_problem"
+            ),
+        ]
+        
+        super().__init__(
+            placeholder="🎫 اختر نوع التذكرة...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="ticket_type_select"
+        )
     
-    @discord.ui.button(label="📩 إنشاء تذكرة", style=discord.ButtonStyle.green, custom_id="create_ticket")
-    async def create_ticket(self, interaction: discord.Interaction, button: Button):
+    async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
         member = interaction.user
+        ticket_type = self.values[0]
         
         if str(member.id) in tickets_db:
             await interaction.response.send_message("❌ لديك تذكرة مفتوحة بالفعل!", ephemeral=True)
@@ -165,6 +192,8 @@ class TicketButton(View):
         
         admin_role = discord.utils.get(guild.roles, name="⚔️ • الإدارة")
         mod_role = discord.utils.get(guild.roles, name="🛡️ • المشرف")
+        coowner_role = discord.utils.get(guild.roles, name="🔮 • المالك المشارك")
+        
         if admin_role:
             overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
         if mod_role:
@@ -176,33 +205,162 @@ class TicketButton(View):
             overwrites=overwrites
         )
         
-        tickets_db[str(member.id)] = ticket_channel.id
+        ticket_data = {
+            "channel_id": ticket_channel.id,
+            "type": ticket_type,
+            "accepted_by": None,
+            "owner_id": str(member.id)
+        }
+        tickets_db[str(member.id)] = ticket_data
+        tickets_by_channel[ticket_channel.id] = ticket_data
         
-        embed = discord.Embed(
-            title="🎫 تذكرة دعم فني",
-            description=f"مرحباً {member.mention}!\n\nالرجاء شرح مشكلتك وسيتم الرد عليك قريباً.",
-            color=0x00FF00
+        type_names = {
+            "tech_support": "💻 دعم فني",
+            "server_problem": "⚙️ مشكلة بالسيرفر",
+            "admin_problem": "👔 مشكلة بسبب الإدارة"
+        }
+        
+        terms_embed = discord.Embed(
+            title="📜 قواعد وشروط فتح التذكرة",
+            description=(
+                "🔹 يُمنع إرسال رسائل غير ضرورية\n"
+                "🔹 احترام فريق الدعم\n"
+                "🔹 شرح المشكلة بوضوح\n"
+                "🔹 عدم فتح تذاكر متعددة لنفس المشكلة\n"
+                "🔹 الانتظار حتى يتم قبول التذكرة"
+            ),
+            color=0xFFA500
         )
         
-        close_view = CloseTicketView()
-        await ticket_channel.send(f"{member.mention}", embed=embed, view=close_view)
+        embed = discord.Embed(
+            title="🎫 تذكرة دعم جديدة",
+            description=f"**النوع:** {type_names[ticket_type]}\n\nمرحباً {member.mention}!\n\nالرجاء انتظار الرد من فريق الدعم.",
+            color=0x00FF00
+        )
+        embed.set_footer(text="✅ سيتم الرد عليك قريباً")
+        
+        mention_text = ""
+        if ticket_type == "admin_problem" and coowner_role:
+            mention_text = f"{coowner_role.mention}"
+        elif admin_role:
+            mention_text = f"{admin_role.mention}"
+        
+        ticket_view = TicketManagementView(ticket_channel.id)
+        
+        await ticket_channel.send(content=mention_text, embeds=[terms_embed, embed], view=ticket_view)
         await interaction.response.send_message(f"✅ تم إنشاء تذكرتك {ticket_channel.mention}", ephemeral=True)
 
-class CloseTicketView(View):
+class TicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(TicketTypeSelect())
+
+class RenameModal(discord.ui.Modal, title="إعادة تسمية التذكرة"):
+    new_name = discord.ui.TextInput(
+        label="الاسم الجديد",
+        placeholder="أدخل اسم القناة الجديد...",
+        required=True,
+        max_length=100
+    )
     
-    @discord.ui.button(label="🔒 إغلاق التذكرة", style=discord.ButtonStyle.red, custom_id="close_ticket")
-    async def close_ticket(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("⏳ جاري إغلاق التذكرة...")
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            new_channel_name = self.new_name.value
+            await interaction.channel.edit(name=new_channel_name)
+            await interaction.response.send_message(f"✅ تم تغيير اسم القناة إلى: **{new_channel_name}**", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ خطأ في تغيير الاسم: {str(e)}", ephemeral=True)
+
+class TicketManagementView(View):
+    def __init__(self, channel_id):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+    
+    @discord.ui.button(label="✅ قبول التذكرة", style=discord.ButtonStyle.success, custom_id="accept_ticket")
+    async def accept_ticket(self, interaction: discord.Interaction, button: Button):
+        admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة", "🛡️ • المشرف"]
+        user_roles = [role.name for role in interaction.user.roles]
         
-        for user_id, channel_id in list(tickets_db.items()):
-            if channel_id == interaction.channel.id:
-                del tickets_db[user_id]
-                break
+        if not any(role in admin_roles for role in user_roles):
+            await interaction.response.send_message("❌ ليس لديك صلاحية قبول التذكرة!", ephemeral=True)
+            return
+        
+        ticket_data = tickets_by_channel.get(self.channel_id)
+        if ticket_data:
+            ticket_data["accepted_by"] = str(interaction.user.id)
+        
+        embed = discord.Embed(
+            title="✅ تم قبول التذكرة",
+            description=f"{interaction.user.mention} قام بقبول هذه التذكرة وسيساعدك الآن.",
+            color=0x00FF00
+        )
+        await interaction.response.send_message(embed=embed)
+    
+    @discord.ui.button(label="🔄 إعادة تسمية", style=discord.ButtonStyle.primary, custom_id="rename_ticket")
+    async def rename_ticket(self, interaction: discord.Interaction, button: Button):
+        admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة"]
+        user_roles = [role.name for role in interaction.user.roles]
+        
+        if not any(role in admin_roles for role in user_roles):
+            await interaction.response.send_message("❌ ليس لديك صلاحية إعادة تسمية التذكرة!", ephemeral=True)
+            return
+        
+        modal = RenameModal()
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="🔒 إغلاق التذكرة", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: Button):
+        ticket_data = tickets_by_channel.get(self.channel_id)
+        if not ticket_data:
+            await interaction.response.send_message("❌ خطأ في بيانات التذكرة!", ephemeral=True)
+            return
+        
+        admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة", "🛡️ • المشرف"]
+        user_roles = [role.name for role in interaction.user.roles]
+        is_admin = any(role in admin_roles for role in user_roles)
+        
+        can_close = (
+            str(interaction.user.id) == ticket_data["owner_id"] or
+            (ticket_data["accepted_by"] and str(interaction.user.id) == ticket_data["accepted_by"]) or
+            is_admin
+        )
+        
+        if not can_close:
+            await interaction.response.send_message("❌ ليس لديك صلاحية إغلاق التذكرة!", ephemeral=True)
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("⏳ جاري إغلاق التذكرة...", ephemeral=True)
+        
+        if ticket_data["owner_id"] in tickets_db:
+            del tickets_db[ticket_data["owner_id"]]
+        if self.channel_id in tickets_by_channel:
+            del tickets_by_channel[self.channel_id]
         
         await asyncio.sleep(3)
-        await interaction.channel.delete()
+        await interaction.channel.delete(reason=f"تم إغلاق التذكرة بواسطة {interaction.user}")
+    
+    @discord.ui.button(label="🗑️ حذف التذكرة", style=discord.ButtonStyle.secondary, custom_id="delete_ticket")
+    async def delete_ticket(self, interaction: discord.Interaction, button: Button):
+        admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة"]
+        user_roles = [role.name for role in interaction.user.roles]
+        
+        if not any(role in admin_roles for role in user_roles):
+            await interaction.response.send_message("❌ ليس لديك صلاحية حذف التذكرة!", ephemeral=True)
+            return
+        
+        ticket_data = tickets_by_channel.get(self.channel_id)
+        
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("🗑️ جاري حذف التذكرة...", ephemeral=True)
+        
+        if ticket_data and ticket_data["owner_id"] in tickets_db:
+            del tickets_db[ticket_data["owner_id"]]
+        if self.channel_id in tickets_by_channel:
+            del tickets_by_channel[self.channel_id]
+        
+        await asyncio.sleep(2)
+        await interaction.channel.delete(reason=f"تم حذف التذكرة بواسطة {interaction.user}")
 
 # ==================== نظام المستويات ====================
 @bot.event
@@ -239,9 +397,12 @@ async def on_message(message):
     
     await bot.process_commands(message)
 
-@bot.command(name='مستوى')
-async def level(ctx, member: discord.Member = None):
-    member = member or ctx.author
+# ==================== Slash Commands ====================
+
+@bot.tree.command(name="مستوى", description="عرض مستوى العضو")
+@app_commands.describe(member="العضو الذي تريد عرض مستواه")
+async def level_slash(interaction: discord.Interaction, member: discord.Member = None):
+    member = member or interaction.user
     user_id = str(member.id)
     
     if user_id not in levels_db:
@@ -256,16 +417,16 @@ async def level(ctx, member: discord.Member = None):
     embed.add_field(name="الرسائل", value=f"💬 {data['messages']}", inline=True)
     embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name='ترتيب')
-async def leaderboard(ctx):
+@bot.tree.command(name="ترتيب", description="عرض ترتيب الأعضاء")
+async def leaderboard_slash(interaction: discord.Interaction):
     sorted_users = sorted(levels_db.items(), key=lambda x: x[1]["xp"], reverse=True)[:10]
     
     embed = discord.Embed(title="🏆 ترتيب الأعضاء", color=0xFFD700)
     
     for idx, (user_id, data) in enumerate(sorted_users, 1):
-        member = ctx.guild.get_member(int(user_id))
+        member = interaction.guild.get_member(int(user_id))
         if member:
             embed.add_field(
                 name=f"{idx}. {member.name}",
@@ -273,12 +434,12 @@ async def leaderboard(ctx):
                 inline=False
             )
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-# ==================== نظام الاقتصاد ====================
-@bot.command(name='فلوس')
-async def balance(ctx, member: discord.Member = None):
-    member = member or ctx.author
+@bot.tree.command(name="فلوس", description="عرض رصيد العضو")
+@app_commands.describe(member="العضو الذي تريد عرض رصيده")
+async def balance_slash(interaction: discord.Interaction, member: discord.Member = None):
+    member = member or interaction.user
     user_id = str(member.id)
     
     if user_id not in economy_db:
@@ -291,11 +452,11 @@ async def balance(ctx, member: discord.Member = None):
     embed.add_field(name="البنك", value=f"🏦 {data['bank']}", inline=True)
     embed.add_field(name="الإجمالي", value=f"💎 {data['coins'] + data['bank']}", inline=True)
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name='يومي')
-async def daily(ctx):
-    user_id = str(ctx.author.id)
+@bot.tree.command(name="يومي", description="الحصول على المكافأة اليومية")
+async def daily_slash(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
     
     if user_id not in economy_db:
         economy_db[user_id] = {"coins": 0, "bank": 0, "last_daily": None}
@@ -303,7 +464,7 @@ async def daily(ctx):
     if "last_daily" in economy_db[user_id] and economy_db[user_id]["last_daily"]:
         last = economy_db[user_id]["last_daily"]
         if (datetime.now() - datetime.fromisoformat(last)).days < 1:
-            await ctx.send("❌ حصلت على مكافأتك اليومية! عد غداً.")
+            await interaction.response.send_message("❌ حصلت على مكافأتك اليومية! عد غداً.", ephemeral=True)
             return
     
     reward = random.randint(100, 500)
@@ -315,18 +476,18 @@ async def daily(ctx):
         description=f"حصلت على **{reward}** 🪙",
         color=0x00FF00
     )
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-# ==================== الألعاب ====================
-@bot.command(name='قمار')
-async def gamble(ctx, amount: int):
-    user_id = str(ctx.author.id)
+@bot.tree.command(name="قمار", description="لعبة القمار")
+@app_commands.describe(amount="المبلغ الذي تريد المراهنة عليه")
+async def gamble_slash(interaction: discord.Interaction, amount: int):
+    user_id = str(interaction.user.id)
     
     if user_id not in economy_db:
         economy_db[user_id] = {"coins": 0, "bank": 0}
     
     if amount <= 0 or economy_db[user_id]["coins"] < amount:
-        await ctx.send("❌ مبلغ غير صالح!")
+        await interaction.response.send_message("❌ مبلغ غير صالح!", ephemeral=True)
         return
     
     win = random.choice([True, False])
@@ -338,12 +499,17 @@ async def gamble(ctx, amount: int):
         economy_db[user_id]["coins"] -= amount
         embed = discord.Embed(title="💔 خسرت!", description=f"خسرت **{amount}** 🪙", color=0xFF0000)
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 # ==================== أوامر الإدارة ====================
-@bot.command(name='تحذير')
-@commands.has_permissions(manage_messages=True)
-async def warn(ctx, member: discord.Member, *, reason: str = "لا يوجد سبب"):
+
+@bot.tree.command(name="تحذير", description="تحذير عضو")
+@app_commands.describe(member="العضو المراد تحذيره", reason="سبب التحذير")
+async def warn_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "لا يوجد سبب"):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ ليس لديك صلاحية!", ephemeral=True)
+        return
+    
     user_id = str(member.id)
     
     if user_id not in warnings_db:
@@ -351,7 +517,7 @@ async def warn(ctx, member: discord.Member, *, reason: str = "لا يوجد سب
     
     warnings_db[user_id].append({
         "reason": reason,
-        "moderator": str(ctx.author.id),
+        "moderator": str(interaction.user.id),
         "date": datetime.now().isoformat()
     })
     
@@ -359,34 +525,145 @@ async def warn(ctx, member: discord.Member, *, reason: str = "لا يوجد سب
     embed.add_field(name="السبب", value=reason, inline=False)
     embed.add_field(name="عدد التحذيرات", value=len(warnings_db[user_id]), inline=False)
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
     
     if len(warnings_db[user_id]) >= 3:
         await member.timeout(timedelta(hours=1), reason="3 تحذيرات")
-        await ctx.send(f"🔇 {member.mention} تم كتمه لمدة ساعة")
+        await interaction.followup.send(f"🔇 {member.mention} تم كتمه لمدة ساعة")
 
-@bot.command(name='كتم')
-@commands.has_permissions(moderate_members=True)
-async def mute(ctx, member: discord.Member, minutes: int = 10, *, reason: str = "لا يوجد سبب"):
+@bot.tree.command(name="كتم", description="كتم عضو لفترة محددة")
+@app_commands.describe(member="العضو المراد كتمه", minutes="عدد الدقائق", reason="سبب الكتم")
+async def mute_slash(interaction: discord.Interaction, member: discord.Member, minutes: int = 10, reason: str = "لا يوجد سبب"):
+    if not interaction.user.guild_permissions.moderate_members:
+        await interaction.response.send_message("❌ ليس لديك صلاحية!", ephemeral=True)
+        return
+    
     await member.timeout(timedelta(minutes=minutes), reason=reason)
-    await ctx.send(f"🔇 تم كتم {member.mention} لمدة {minutes} دقيقة")
+    await interaction.response.send_message(f"🔇 تم كتم {member.mention} لمدة {minutes} دقيقة")
 
-@bot.command(name='مسح')
-@commands.has_permissions(manage_messages=True)
-async def clear(ctx, amount: int = 10):
-    deleted = await ctx.channel.purge(limit=amount + 1)
-    msg = await ctx.send(f"✅ تم مسح {len(deleted) - 1} رسالة")
-    await asyncio.sleep(3)
-    await msg.delete()
+@bot.tree.command(name="مسح", description="مسح عدد من الرسائل")
+@app_commands.describe(amount="عدد الرسائل المراد مسحها")
+async def clear_slash(interaction: discord.Interaction, amount: int = 10):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ ليس لديك صلاحية!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount)
+    await interaction.followup.send(f"✅ تم مسح {len(deleted)} رسالة", ephemeral=True)
+
+# ==================== أوامر قفل وإخفاء القنوات ====================
+
+@bot.tree.command(name="قفل", description="قفل القناة (فقط الإدارة يمكنهم الكتابة)")
+async def lock_slash(interaction: discord.Interaction):
+    admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة", "🛡️ • المشرف"]
+    user_roles = [role.name for role in interaction.user.roles]
+    
+    if not any(role in admin_roles for role in user_roles):
+        await interaction.response.send_message("❌ ليس لديك صلاحية قفل القناة!", ephemeral=True)
+        return
+    
+    channel = interaction.channel
+    await channel.set_permissions(interaction.guild.default_role, send_messages=False)
+    
+    embed = discord.Embed(
+        title="🔒 تم قفل القناة",
+        description="يمكن للإدارة فقط الكتابة في هذه القناة",
+        color=0xFF0000
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="فتح", description="فتح القناة المقفلة")
+async def unlock_slash(interaction: discord.Interaction):
+    admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة", "🛡️ • المشرف"]
+    user_roles = [role.name for role in interaction.user.roles]
+    
+    if not any(role in admin_roles for role in user_roles):
+        await interaction.response.send_message("❌ ليس لديك صلاحية فتح القناة!", ephemeral=True)
+        return
+    
+    channel = interaction.channel
+    await channel.set_permissions(interaction.guild.default_role, send_messages=None)
+    
+    embed = discord.Embed(
+        title="🔓 تم فتح القناة",
+        description="يمكن للجميع الكتابة في هذه القناة الآن",
+        color=0x00FF00
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="اخفاء", description="إخفاء القناة عن الأعضاء")
+async def hide_slash(interaction: discord.Interaction):
+    admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة"]
+    user_roles = [role.name for role in interaction.user.roles]
+    
+    if not any(role in admin_roles for role in user_roles):
+        await interaction.response.send_message("❌ ليس لديك صلاحية إخفاء القناة!", ephemeral=True)
+        return
+    
+    channel = interaction.channel
+    await channel.set_permissions(interaction.guild.default_role, view_channel=False)
+    
+    embed = discord.Embed(
+        title="👁️ تم إخفاء القناة",
+        description="لا يمكن للأعضاء العاديين رؤية هذه القناة",
+        color=0xFF0000
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="اظهار", description="إظهار القناة المخفية")
+async def unhide_slash(interaction: discord.Interaction):
+    admin_roles = ["👑 • المالك", "🔮 • المالك المشارك", "⚔️ • الإدارة"]
+    user_roles = [role.name for role in interaction.user.roles]
+    
+    if not any(role in admin_roles for role in user_roles):
+        await interaction.response.send_message("❌ ليس لديك صلاحية إظهار القناة!", ephemeral=True)
+        return
+    
+    channel = interaction.channel
+    await channel.set_permissions(interaction.guild.default_role, view_channel=None)
+    
+    embed = discord.Embed(
+        title="👁️ تم إظهار القناة",
+        description="يمكن للأعضاء رؤية هذه القناة الآن",
+        color=0x00FF00
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==================== أمر إعطاء الرتبة ====================
+
+@bot.tree.command(name="اعطاء", description="إعطاء رتبة لعضو")
+@app_commands.describe(member="العضو", role="الرتبة")
+async def give_role_slash(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ ليس لديك صلاحية إدارة الرتب!", ephemeral=True)
+        return
+    
+    if role >= interaction.user.top_role:
+        await interaction.response.send_message("❌ لا يمكنك إعطاء رتبة أعلى من رتبتك!", ephemeral=True)
+        return
+    
+    await member.add_roles(role)
+    embed = discord.Embed(
+        title="✅ تم إعطاء الرتبة",
+        description=f"تم إعطاء {member.mention} رتبة {role.mention}",
+        color=0x00FF00
+    )
+    await interaction.response.send_message(embed=embed)
 
 # ==================== إعداد السيرفر ====================
-@bot.command(name='اعداد_السيرفر')
-@commands.has_permissions(administrator=True)
-async def setup_server(ctx):
-    guild = ctx.guild
-    await ctx.send("🚀 **بدء إعداد السيرفر...**")
+
+@bot.tree.command(name="اعداد_السيرفر", description="إعداد السيرفر تلقائياً")
+async def setup_server_slash(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ ليس لديك صلاحية!", ephemeral=True)
+        return
     
-    # حذف القنوات والرتب القديمة
+    await interaction.response.defer()
+    guild = interaction.guild
+    
+    await interaction.followup.send("🚀 **بدء إعداد السيرفر...**")
+    
     for channel in guild.channels:
         try:
             await channel.delete()
@@ -402,7 +679,6 @@ async def setup_server(ctx):
             except:
                 pass
     
-    # إنشاء الرتب
     for role_data in ROLES:
         try:
             await guild.create_role(
@@ -415,7 +691,6 @@ async def setup_server(ctx):
         except:
             pass
     
-    # إنشاء القنوات
     ticket_channel = None
     for category_name, channels in CATEGORIES_AND_CHANNELS.items():
         try:
@@ -433,29 +708,48 @@ async def setup_server(ctx):
         except:
             pass
     
-    # إعداد نظام التذاكر
     if ticket_channel:
         ticket_embed = discord.Embed(
             title="🎫 نظام الدعم الفني",
-            description="اضغط على الزر لإنشاء تذكرة",
+            description="اختر نوع التذكرة من القائمة المنسدلة:",
             color=0x00FF00
         )
-        view = TicketButton()
+        view = TicketView()
         await ticket_channel.send(embed=ticket_embed, view=view)
     
-    await ctx.send("✅ **تم إعداد السيرفر بنجاح!**")
+    await interaction.followup.send("✅ **تم إعداد السيرفر بنجاح!**")
 
-@bot.command(name='مساعدة')
-async def help_command(ctx):
-    embed = discord.Embed(title="📚 أوامر البوت", color=0x3498DB)
-    embed.add_field(name="!اعداد_السيرفر", value="إعداد السيرفر", inline=False)
-    embed.add_field(name="!مستوى", value="عرض مستواك", inline=False)
-    embed.add_field(name="!فلوس", value="عرض رصيدك", inline=False)
-    embed.add_field(name="!يومي", value="مكافأة يومية", inline=False)
-    embed.add_field(name="!قمار [مبلغ]", value="لعبة القمار", inline=False)
-    await ctx.send(embed=embed)
+@bot.tree.command(name="مساعدة", description="عرض قائمة الأوامر")
+async def help_slash(interaction: discord.Interaction):
+    embed = discord.Embed(title="📚 أوامر البوت", color=0x3498DB, description="جميع الأوامر المتاحة:")
+    
+    embed.add_field(name="⚙️ إدارة السيرفر", value=(
+        "`/اعداد_السيرفر` - إعداد السيرفر\n"
+        "`/قفل` - قفل القناة\n"
+        "`/فتح` - فتح القناة\n"
+        "`/اخفاء` - إخفاء القناة\n"
+        "`/اظهار` - إظهار القناة"
+    ), inline=False)
+    
+    embed.add_field(name="👮 الإشراف", value=(
+        "`/تحذير` - تحذير عضو\n"
+        "`/كتم` - كتم عضو\n"
+        "`/مسح` - مسح رسائل\n"
+        "`/اعطاء` - إعطاء رتبة"
+    ), inline=False)
+    
+    embed.add_field(name="🎮 المستويات والاقتصاد", value=(
+        "`/مستوى` - عرض المستوى\n"
+        "`/ترتيب` - عرض الترتيب\n"
+        "`/فلوس` - عرض الرصيد\n"
+        "`/يومي` - مكافأة يومية\n"
+        "`/قمار` - لعبة القمار"
+    ), inline=False)
+    
+    await interaction.response.send_message(embed=embed)
 
 # ==================== الأحداث ====================
+
 @bot.event
 async def on_ready():
     print("=" * 50)
@@ -465,8 +759,13 @@ async def on_ready():
     print("☁️ يعمل على السحابة")
     print("=" * 50)
     
-    bot.add_view(TicketButton())
-    bot.add_view(CloseTicketView())
+    bot.add_view(TicketView())
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ تم مزامنة {len(synced)} أمر Slash")
+    except Exception as e:
+        print(f"❌ خطأ في المزامنة: {e}")
 
 @bot.event
 async def on_member_join(member):
@@ -474,9 +773,11 @@ async def on_member_join(member):
     if welcome_channel:
         embed = discord.Embed(
             title=f"🎉 مرحباً {member.name}!",
-            description=f"أهلاً بك في **{member.guild.name}**!",
+            description=f"أهلاً بك في **{member.guild.name}**!\n\nأنت العضو رقم **{member.guild.member_count}**",
             color=0x00FF00
         )
+        embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+        embed.set_footer(text=f"انضم في {datetime.now().strftime('%Y-%m-%d')}")
         await welcome_channel.send(f"{member.mention}", embed=embed)
     
     member_role = discord.utils.get(member.guild.roles, name="👤 • العضو")
@@ -491,7 +792,6 @@ if __name__ == "__main__":
     print("☁️ مستضاف على: Replit/Railway/Render")
     print("🌐 بدء Web Server...")
     
-    # تشغيل Web Server
     keep_alive()
     
     print("🤖 بدء تشغيل البوت...")

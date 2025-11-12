@@ -12,6 +12,13 @@ This is a comprehensive Discord bot written in Python that provides complete ser
 - **Command Interface**: Slash Commands (/) - like ProBot
 
 ## Recent Changes
+- 2024-11-12: Added hierarchical role system
+  - ✅ Implemented role hierarchy (Owner > Co-Owner > Admin > Moderator > Helper > Booster > VIP > Member)
+  - ✅ Higher roles can only assign lower roles (e.g., Admin can assign Moderator but not Co-Owner)
+  - ✅ Auto-remove lower hierarchy roles when assigning higher role
+  - ✅ Preserve custom/non-hierarchy roles during assignment
+  - ✅ Clear feedback showing which roles were removed
+
 - 2024-11-12: Major update - Complete rewrite with modern features
   - ✅ Converted all commands to Slash Commands using app_commands
   - ✅ Added channel lock/unlock commands
@@ -73,9 +80,16 @@ This is a comprehensive Discord bot written in Python that provides complete ser
 - Hide/unhide channels (hide from regular members, admins always see)
 - Proper permission management
 
-**Role Management:**
+**Role Management with Hierarchical System:**
 - Assign roles with native Discord role picker
-- Permission validation (can't assign higher roles)
+- **Hierarchical role system**: Owner > Co-Owner > Admin > Moderator > Helper > Booster > VIP > Member
+- **Permission validation**: Users can only assign roles lower than their highest role
+  - Example: Admin can assign Moderator, Helper, Booster, VIP, Member
+  - Example: Co-Owner can assign all roles except Owner
+- **Auto-remove lower roles**: When assigning a higher role, all lower hierarchy roles are automatically removed
+  - Example: User has "Helper" + "VIP" → receives "Moderator" → "Helper" removed, "VIP" kept (not in hierarchy)
+- **Preserve custom roles**: Non-hierarchy roles (custom tags, event roles, etc.) are preserved during assignment
+- **Clear feedback**: Shows which roles were removed in the response embed
 
 **Leveling System:**
 - XP and levels based on message activity

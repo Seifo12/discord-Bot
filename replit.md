@@ -1,16 +1,35 @@
 # Discord Bot - Comprehensive Server Management
 
 ## Overview
-This is a comprehensive Discord bot written in Python that provides complete server management capabilities. The bot includes features for ticket support, leveling system, economy system, moderation commands, and automated server setup. The bot interface and commands are in Arabic.
+This is a comprehensive Discord bot written in Python that provides complete server management capabilities. The bot includes features for advanced ticket support, leveling system, economy system, moderation commands, channel management, and automated server setup. All commands use Discord's modern Slash Commands (/) interface and the bot interface is in Arabic.
 
 ## Current State
 - **Language**: Python 3.11
-- **Main Dependencies**: discord.py, flask
-- **Status**: Configured and ready to run
+- **Main Dependencies**: discord.py (2.0+), flask
+- **Status**: Fully operational with 15 slash commands
 - **Port**: 5000 (Flask status page)
 - **Database**: Currently using in-memory dictionaries (data will reset on restart)
+- **Command Interface**: Slash Commands (/) - like ProBot
 
 ## Recent Changes
+- 2024-11-12: Major update - Complete rewrite with modern features
+  - ✅ Converted all commands to Slash Commands using app_commands
+  - ✅ Added channel lock/unlock commands
+  - ✅ Added channel hide/unhide commands
+  - ✅ Added role assignment command with native Discord role picker
+  - ✅ Completely rebuilt ticket system with:
+    - Dropdown menu to select ticket type
+    - 3 ticket types: Technical Support, Server Problem, Admin Problem
+    - Terms and conditions display
+    - Role mentions based on ticket type
+    - Modal window for renaming tickets
+    - 4 management buttons: Accept, Rename, Close, Delete
+    - Proper permissions for each action
+    - Fixed duplicate message issues
+  - ✅ Added member avatar to welcome messages
+  - ✅ Improved persistent view handling
+  - ✅ All existing features (levels, economy) now use slash commands
+  
 - 2024-11-12: Initial setup for Replit environment
   - Installed Python 3.11 and dependencies (discord.py, flask)
   - Updated Flask web server port from 8080 to 5000
@@ -37,24 +56,79 @@ This is a comprehensive Discord bot written in Python that provides complete ser
    - `economy_db`: Stores user coins and bank balances
 
 ### Key Features
-- **Ticket System**: Create and close support tickets with button UI
-- **Leveling System**: XP and levels based on message activity
-- **Economy System**: Virtual currency with daily rewards and gambling
-- **Moderation**: Warning, muting, and message clearing commands
-- **Server Setup**: Automated server configuration with roles and channels
-- **Welcome System**: Greets new members and assigns default role
 
-### Available Commands
-- `!اعداد_السيرفر` - Setup server with predefined roles and channels (Admin only)
-- `!مستوى` - Show user level and XP
-- `!ترتيب` - Show server leaderboard
-- `!فلوس` - Show user balance
-- `!يومي` - Claim daily reward
-- `!قمار [amount]` - Gamble coins
-- `!تحذير @user [reason]` - Warn a user (Moderator)
-- `!كتم @user [minutes] [reason]` - Timeout a user (Moderator)
-- `!مسح [amount]` - Clear messages (Moderator)
-- `!مساعدة` - Show help menu
+**Advanced Ticket System:**
+- Dropdown menu to select ticket type (Technical Support / Server Problem / Admin Problem)
+- Terms and conditions display before ticket creation
+- Role mentions based on ticket type (co-owner for admin problems, admin for others)
+- Accept button for staff to claim tickets
+- Rename button with modal input window (admin only)
+- Close button (ticket owner, assigned staff, or admins)
+- Delete button (admin only)
+- Persistent view handling across bot restarts
+- Fixed duplicate message issues
+
+**Channel Management:**
+- Lock/unlock channels (only admin roles can speak in locked channels)
+- Hide/unhide channels (hide from regular members, admins always see)
+- Proper permission management
+
+**Role Management:**
+- Assign roles with native Discord role picker
+- Permission validation (can't assign higher roles)
+
+**Leveling System:**
+- XP and levels based on message activity
+- Level-up announcements
+- Leaderboard system
+
+**Economy System:**
+- Virtual currency with coins and bank
+- Daily rewards (100-500 coins)
+- Gambling system
+- Auto-earn coins while chatting
+
+**Moderation:**
+- Warning system with auto-mute after 3 warnings
+- Timeout/mute with custom duration
+- Bulk message clearing
+- Permission-based access control
+
+**Server Setup:**
+- Automated server configuration with predefined roles and channels
+- Creates category structure
+- Sets up ticket system automatically
+
+**Welcome System:**
+- Greets new members with custom embed
+- Shows member avatar/profile picture
+- Displays member count
+- Auto-assigns default role
+
+### Available Slash Commands (/)
+
+**Server Management:**
+- `/اعداد_السيرفر` - Setup server with predefined roles and channels (Admin only)
+- `/قفل` - Lock channel (only admins can write)
+- `/فتح` - Unlock channel
+- `/اخفاء` - Hide channel from regular members
+- `/اظهار` - Show hidden channel
+
+**Moderation:**
+- `/تحذير [member] [reason]` - Warn a user (auto-mute after 3 warnings)
+- `/كتم [member] [minutes] [reason]` - Timeout a user
+- `/مسح [amount]` - Clear messages
+- `/اعطاء [member] [role]` - Assign role to member
+
+**Leveling & Economy:**
+- `/مستوى [member]` - Show user level and XP
+- `/ترتيب` - Show server leaderboard
+- `/فلوس [member]` - Show user balance
+- `/يومي` - Claim daily reward
+- `/قمار [amount]` - Gamble coins
+
+**Help:**
+- `/مساعدة` - Show all commands
 
 ### Configuration
 - **Token**: Stored in Replit Secrets as `TOKEN`

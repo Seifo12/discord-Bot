@@ -101,6 +101,19 @@ ROLES = [
     {"name": "👤 • العضو", "color": 0x95A5A6, "permissions": discord.Permissions.none()},
 ]
 
+# التسلسل الهرمي للرتب (من الأعلى إلى الأدنى)
+# كل رتبة يمكنها إعطاء الرتب التي تحتها فقط
+ROLE_HIERARCHY = [
+    "👑 • المالك",
+    "🔮 • المالك المشارك",
+    "⚔️ • الإدارة",
+    "🛡️ • المشرف",
+    "🎯 • المساعد",
+    "💎 • البوستر",
+    "🏆 • الرائع",
+    "👤 • العضو"
+]
+
 # القنوات
 CATEGORIES_AND_CHANNELS = {
     "📢 • الإعلانات": [
@@ -632,23 +645,75 @@ async def unhide_slash(interaction: discord.Interaction):
 
 # ==================== أمر إعطاء الرتبة ====================
 
+def get_role_rank(role_name):
+    """الحصول على ترتيب الرتبة في التسلسل الهرمي (رقم أقل = رتبة أعلى)"""
+    if role_name in ROLE_HIERARCHY:
+        return ROLE_HIERARCHY.index(role_name)
+    return 999
+
+def get_highest_staff_role(user_roles):
+    """الحصول على أعلى رتبة إدارية للمستخدم"""
+    highest_rank = 999
+    highest_role = None
+    
+    for role in user_roles:
+        rank = get_role_rank(role.name)
+        if rank < highest_rank:
+            highest_rank = rank
+            highest_role = role.name
+    
+    return highest_role, highest_rank
+
 @bot.tree.command(name="اعطاء", description="إعطاء رتبة لعضو")
 @app_commands.describe(member="العضو", role="الرتبة")
 async def give_role_slash(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("❌ ليس لديك صلاحية إدارة الرتب!", ephemeral=True)
+    user_highest_role, user_rank = get_highest_staff_role(interaction.user.roles)
+    target_role_rank = get_role_rank(role.name)
+    
+    if user_rank == 999:
+        await interaction.response.send_message("❌ ليس لديك صلاحية إعطاء رتب!", ephemeral=True)
         return
     
-    if role >= interaction.user.top_role:
-        await interaction.response.send_message("❌ لا يمكنك إعطاء رتبة أعلى من رتبتك!", ephemeral=True)
+    if target_role_rank <= user_rank:
+        await interaction.response.send_message(
+            f"❌ لا يمكنك إعطاء رتبة {role.mention}!\n"
+            f"رتبتك: **{user_highest_role}**\n"
+            f"يمكنك فقط إعطاء الرتب الأقل من رتبتك.",
+            ephemeral=True
+        )
         return
+    
+    if target_role_rank == 999:
+        await interaction.response.send_message("❌ هذه الرتبة غير موجودة في النظام الهرمي!", ephemeral=True)
+        return
+    
+    roles_to_remove = []
+    for member_role in member.roles:
+        member_role_rank = get_role_rank(member_role.name)
+        if member_role_rank > target_role_rank:
+            roles_to_remove.append(member_role)
+    
+    removed_roles_names = [r.name for r in roles_to_remove]
+    
+    if roles_to_remove:
+        await member.remove_roles(*roles_to_remove)
     
     await member.add_roles(role)
+    
     embed = discord.Embed(
         title="✅ تم إعطاء الرتبة",
         description=f"تم إعطاء {member.mention} رتبة {role.mention}",
         color=0x00FF00
     )
+    
+    if removed_roles_names:
+        embed.add_field(
+            name="🗑️ الرتب المحذوفة",
+            value="\n".join([f"• {name}" for name in removed_roles_names]),
+            inline=False
+        )
+    
+    embed.set_footer(text=f"بواسطة {interaction.user.name}")
     await interaction.response.send_message(embed=embed)
 
 # ==================== إعداد السيرفر ====================
